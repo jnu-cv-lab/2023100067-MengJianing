@@ -1,0 +1,183 @@
+# -*- coding: utf-8 -*-
+import numpy as np
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+from scipy.ndimage import gaussian_filter
+import cv2
+import os
+
+# ======================= 生成测试图 =======================
+def generate_test_images(size=256):
+    block = size // 8
+    checkerboard = np.zeros((size, size))
+    for i in range(8):
+        for j in range(8):
+            if (i + j) % 2 == 0:
+                checkerboard[i*block:(i+1)*block, j*block:(j+1)*block] = 1.0
+
+    x = np.linspace(0, 1, size)
+    X, Y = np.meshgrid(x, x)
+    freq_max = size / 4
+    phase = 2 * np.pi * freq_max * X * X
+    chirp = 0.5 + 0.5 * np.cos(phase)
+
+    return checkerboard, chirp
+
+# ======================= 下采样 =======================
+def downsample(image, factor):
+    return image[::factor, ::factor]
+
+def downsample_with_antialias(image, factor, sigma):
+    filtered = gaussian_filter(image, sigma=sigma, mode='reflect')
+    return filtered[::factor, ::factor]
+
+# ======================= 频谱 =======================
+def compute_spectrum(image):
+    f = np.fft.fft2(image)
+    fshift = np.fft.fftshift(f)
+    mag = np.log(np.abs(fshift) + 1e-8)
+    return fshift, mag
+
+# ======================= 高频能量 =======================
+def high_freq_energy(fshift):
+    h, w = fshift.shape
+    cy, cx = h//2, w//2
+    Y, X = np.ogrid[:h, :w]
+    radius = np.sqrt((X-cx)**2 + (Y-cy)**2)
+
+    # ⭐ Nyquist附近（关键）
+    mask = radius > (0.25 * min(h, w))
+    return np.sum(np.abs(fshift)[mask])
+
+# ======================= 主函数 =======================
+def main():
+    print("开始实验")
+
+    M = 4
+    sigma_opt = 0.45 * M  # 1.8
+
+    # ---------- 第一部分 ----------
+    checker, chirp = generate_test_images(256)
+
+    checker_direct = downsample(checker, M)
+    checker_aa = downsample_with_antialias(checker, M, sigma_opt)
+
+    chirp_direct = downsample(chirp, M)
+    chirp_aa = downsample_with_antialias(chirp, M, sigma_opt)
+
+    fig, ax = plt.subplots(2, 3, figsize=(10,6))
+
+    ax[0,0].imshow(checker, cmap='gray')
+    ax[0,0].set_title("Checker")
+
+    ax[0,1].imshow(checker_direct, cmap='gray')
+    ax[0,1].set_title("Direct Down")
+
+    ax[0,2].imshow(checker_aa, cmap='gray')
+    ax[0,2].set_title("Anti-alias")
+
+    ax[1,0].imshow(chirp, cmap='gray')
+    ax[1,0].set_title("Chirp")
+
+    ax[1,1].imshow(chirp_direct, cmap='gray')
+    ax[1,1].set_title("Aliased")
+
+    ax[1,2].imshow(chirp_aa, cmap='gray')
+    ax[1,2].set_title("No Aliasing")
+
+    plt.tight_layout()
+    plt.savefig("part1.png", dpi=150)
+    plt.close()
+
+    # ---------- 第二部分（重点） ----------
+    print("\n验证 σ≈0.45M")
+
+    # ⭐ 用 chirp！
+    img = chirp
+
+    sigma_values = [0.5, 1.0, 1.8, 4.0]
+    hf_list = []
+
+    fig2, axes = plt.subplots(3, 4, figsize=(12, 9))
+
+    for i, sigma in enumerate(sigma_values):
+        down = downsample_with_antialias(img, M, sigma)
+
+        # 图像
+        axes[0,i].imshow(down, cmap='gray')
+        axes[0,i].set_title(f"σ={sigma}")
+        axes[0,i].axis('off')
+
+        # 频谱
+        fshift, mag = compute_spectrum(down)
+        axes[1,i].imshow(mag, cmap='gray')
+        axes[1,i].set_title("Spectrum")
+        axes[1,i].axis('off')
+
+        # 高频能量
+        hf = high_freq_energy(fshift)
+        hf_list.append(hf)
+
+        axes[2,i].text(0.1, 0.5, f"HF:\n{hf:.2e}", fontsize=12)
+        axes[2,i].axis('off')
+
+    plt.tight_layout()
+    plt.savefig("part2_sigma.png", dpi=150)
+    plt.close()
+
+    # 输出最优σ
+    best_idx = np.argmin(hf_list)
+    best_sigma = sigma_values[best_idx]
+
+    print(f"高频能量最小 σ = {best_sigma}")
+    print(f"理论 σ = {sigma_opt:.2f}")
+
+    # ---------- 第三部分 ----------
+    print("\n自适应下采样")
+
+    sobelx = cv2.Sobel(img, cv2.CV_64F, 1, 0)
+    sobely = cv2.Sobel(img, cv2.CV_64F, 0, 1)
+    grad = np.hypot(sobelx, sobely)
+
+    grad_norm = grad / (grad.max() + 1e-8)
+    M_map = 8 - 6 * grad_norm
+
+    sigma_map = 0.45 * M_map
+
+    h, w = img.shape
+    out = np.zeros((h//4, w//4))
+
+    block = 16
+
+    for i in range(0, h, block):
+        for j in range(0, w, block):
+            block_img = img[i:i+block, j:j+block]
+            s = np.mean(sigma_map[i:i+block, j:j+block])
+            filtered = gaussian_filter(block_img, sigma=s)
+            down = filtered[::4, ::4]
+
+            out[i//4:i//4+down.shape[0],
+                j//4:j//4+down.shape[1]] = down
+
+    uniform = downsample_with_antialias(img, 4, sigma_opt)
+
+    fig3, ax3 = plt.subplots(1,3, figsize=(10,3))
+
+    ax3[0].imshow(img, cmap='gray')
+    ax3[0].set_title("Original")
+
+    ax3[1].imshow(uniform, cmap='gray')
+    ax3[1].set_title("Uniform")
+
+    ax3[2].imshow(out, cmap='gray')
+    ax3[2].set_title("Adaptive")
+
+    plt.tight_layout()
+    plt.savefig("part3.png", dpi=150)
+    plt.close()
+
+    print("\n实验完成！")
+
+if __name__ == "__main__":
+    main()
