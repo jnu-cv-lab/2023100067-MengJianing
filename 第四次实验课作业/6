@@ -1,0 +1,208 @@
+import numpy as np
+import matplotlib.pyplot as plt
+import cv2
+import os
+
+def r2_score(y_true, y_pred):
+    """手动计算 R² (决定系数)"""
+    ss_res = np.sum((y_true - y_pred) ** 2)
+    ss_tot = np.sum((y_true - np.mean(y_true)) ** 2)
+    return 1 - (ss_res / ss_tot)
+
+def fft_cutoff_95(block):
+    """
+    FFT方法：返回包含95%能量的截止频率
+    """
+    h, w = block.shape
+
+    # ⭐ 改进1：加Hanning窗，减少频谱泄漏
+    win_y = np.hanning(h)
+    win_x = np.hanning(w)
+    window = np.outer(win_y, win_x)
+    block = block * window
+
+    # 去直流分量
+    block = block - np.mean(block)
+
+    # FFT
+    F = np.fft.fft2(block)
+    P = np.abs(F) ** 2
+    P_shift = np.fft.fftshift(P)
+
+    # 频率坐标
+    u = np.fft.fftfreq(w, d=1)
+    v = np.fft.fftfreq(h, d=1)
+    u, v = np.meshgrid(u, v)
+    u_shift = np.fft.fftshift(u)
+    v_shift = np.fft.fftshift(v)
+
+    radius = np.sqrt(u_shift**2 + v_shift**2)
+
+    # 展平排序
+    flat_r = radius.flatten()
+    flat_p = P_shift.flatten()
+    sort_idx = np.argsort(flat_r)
+
+    sorted_r = flat_r[sort_idx]
+    sorted_p = flat_p[sort_idx]
+
+    cumsum = np.cumsum(sorted_p)
+    total = cumsum[-1]
+
+    if total == 0:
+        return 0.0
+
+    target = 0.95 * total
+    idx = np.searchsorted(cumsum, target)
+    idx = min(idx, len(sorted_r) - 1)
+
+    f_cut = sorted_r[idx]
+    return min(f_cut, 0.5)
+
+def gradient_rms_frequency(block):
+    """
+    梯度方法：估计 RMS 频率
+    """
+    # ⭐ 改进2：高斯滤波，降低噪声影响
+    block = cv2.GaussianBlur(block, (3, 3), 0)
+
+    gy, gx = np.gradient(block)
+    grad_mag_sq = gx**2 + gy**2
+
+    mean_grad_sq = np.mean(grad_mag_sq)
+    var = np.var(block)
+
+    if var < 1e-10:
+        return 0.0
+
+    f_rms = np.sqrt(mean_grad_sq / (4 * np.pi**2 * var))
+    return min(f_rms, 0.5)
+
+def main(image_path, block_size=64, out_dir="."):
+    if not os.path.exists(image_path):
+        raise FileNotFoundError(f"图像不存在: {image_path}")
+
+    img = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
+    if img is None:
+        raise ValueError(f"无法读取图像: {image_path}")
+
+    h, w = img.shape
+    print(f"原始尺寸: {h} x {w}")
+
+    # 裁剪
+    h_crop = h - h % block_size
+    w_crop = w - w % block_size
+    img = img[:h_crop, :w_crop]
+
+    print(f"裁剪后尺寸: {img.shape}, block={block_size}")
+
+    fft_freqs = []
+    grad_freqs = []
+
+    # 分块计算
+    for i in range(0, img.shape[0], block_size):
+        for j in range(0, img.shape[1], block_size):
+            block = img[i:i+block_size, j:j+block_size]
+
+            fft_f = fft_cutoff_95(block)
+            grad_f = gradient_rms_frequency(block)
+
+            fft_freqs.append(fft_f)
+            grad_freqs.append(grad_f)
+
+    fft_freqs = np.array(fft_freqs)
+    grad_freqs = np.array(grad_freqs)
+
+    # 去除无效块
+    valid = (fft_freqs > 0) & (grad_freqs > 0)
+    fft_freqs = fft_freqs[valid]
+    grad_freqs = grad_freqs[valid]
+
+    # 统计
+    corr = np.corrcoef(fft_freqs, grad_freqs)[0, 1]
+    coeffs = np.polyfit(fft_freqs, grad_freqs, 1)
+    poly = np.poly1d(coeffs)
+    r2 = r2_score(grad_freqs, poly(fft_freqs))
+
+    print("\n========== 统计结果 ==========")
+    print(f"有效块数: {len(fft_freqs)}")
+    print(f"FFT均值: {np.mean(fft_freqs):.4f}")
+    print(f"Gradient均值: {np.mean(grad_freqs):.4f}")
+    print(f"相关系数 r: {corr:.4f}")
+    print(f"拟合: f_grad = {coeffs[0]:.4f} * f_fft + {coeffs[1]:.4f}")
+    print(f"R²: {r2:.4f}")
+
+    # ===== 散点图 =====
+    plt.figure(figsize=(8, 6))
+    plt.scatter(fft_freqs, grad_freqs, alpha=0.6, edgecolors='k', s=40)
+
+    max_f = max(fft_freqs.max(), grad_freqs.max())
+
+    # y=x
+    plt.plot([0, max_f], [0, max_f], 'r--', label='y=x')
+
+    # 拟合线
+    x_line = np.linspace(0, max_f, 100)
+    plt.plot(x_line, poly(x_line), 'g-', label=f'fit (R²={r2:.3f})')
+
+    plt.xlabel('FFT 95% frequency')
+    plt.ylabel('Gradient RMS frequency')
+    plt.title(f'FFT vs Gradient (r={corr:.3f})')
+    plt.legend()
+    plt.grid(True)
+    plt.axis('equal')
+
+    scatter_path = os.path.join(out_dir, "scatter.png")
+    plt.savefig(scatter_path, dpi=150, bbox_inches='tight')
+    plt.close()
+
+    print(f"散点图已保存: {scatter_path}")
+
+    # ===== 功率谱示意 =====
+    first_block = img[:block_size, :block_size]
+
+    # 同样加窗（保持一致性）
+    win = np.outer(np.hanning(block_size), np.hanning(block_size))
+    block_ac = (first_block * win) - np.mean(first_block)
+
+    F = np.fft.fft2(block_ac)
+    P_shift = np.fft.fftshift(np.abs(F)**2)
+
+    u = np.fft.fftfreq(block_size, d=1)
+    v = np.fft.fftfreq(block_size, d=1)
+    u, v = np.meshgrid(u, v)
+    radius = np.sqrt(np.fft.fftshift(u)**2 + np.fft.fftshift(v)**2)
+
+    flat_r = radius.flatten()
+    flat_p = P_shift.flatten()
+
+    sort_idx = np.argsort(flat_r)
+    sorted_r = flat_r[sort_idx]
+    sorted_p = flat_p[sort_idx]
+
+    cum_norm = np.cumsum(sorted_p) / np.sum(sorted_p)
+    idx = np.searchsorted(cum_norm, 0.95)
+    f_cut = sorted_r[idx]
+
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+
+    im = axes[0].imshow(np.log1p(P_shift), cmap='gray')
+    axes[0].set_title('Power Spectrum')
+    plt.colorbar(im, ax=axes[0])
+
+    axes[1].plot(sorted_r, cum_norm)
+    axes[1].axhline(0.95, linestyle='--')
+    axes[1].axvline(f_cut, linestyle='--')
+    axes[1].set_title('Cumulative Energy')
+    axes[1].grid(True)
+
+    power_path = os.path.join(out_dir, "power_spectrum.png")
+    plt.savefig(power_path, dpi=150, bbox_inches='tight')
+    plt.close()
+
+    print(f"功率谱图已保存: {power_path}")
+
+if __name__ == "__main__":
+    image_path = "/home/fntq/cv-course/lab01/src/lena.png"
+    output_dir = "."
+    main(image_path, block_size=64, out_dir=output_dir)
