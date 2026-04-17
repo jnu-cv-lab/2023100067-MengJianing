@@ -8,43 +8,40 @@ import numpy as np
 def generate_test_image(width=600, height=400):
     img = np.ones((height, width, 3), dtype=np.uint8) * 255
 
-    # 彩色网格
     for i in range(0, width, 50):
         cv2.line(img, (i, 0), (i, height), (200, 200, 255), 1)
     for j in range(0, height, 50):
         cv2.line(img, (0, j), (width, j), (200, 255, 200), 1)
 
-    # 彩色矩形
     cv2.rectangle(img, (50, 100), (150, 300), (255, 0, 0), -1)
-
-    # 圆
     cv2.circle(img, (400, 200), 60, (0, 0, 255), -1)
 
-    # 平行线（绿色）
     cv2.line(img, (200, 80), (350, 80), (0, 150, 0), 3)
     cv2.line(img, (200, 100), (350, 100), (0, 150, 0), 3)
     cv2.line(img, (200, 120), (350, 120), (0, 150, 0), 3)
 
-    # 垂直十字（紫色）
     cv2.line(img, (300, 250), (300, 350), (150, 0, 150), 3)
     cv2.line(img, (250, 300), (350, 300), (150, 0, 150), 3)
 
-    # 外框
     cv2.rectangle(img, (20, 20), (width - 20, height - 20), (0, 0, 0), 2)
 
     return img
 
 
 # =========================
-# 2 三种变换
+# 2 三种变换（手动构造矩阵）
 # =========================
 def similarity_transform(img):
     h, w = img.shape[:2]
-    center = (w // 2, h // 2)
 
-    M = cv2.getRotationMatrix2D(center, 30, 0.8)
-    M[0, 2] += 50
-    M[1, 2] += 30
+    angle = 30 * np.pi / 180
+    s = 0.8
+    tx, ty = 50, 30
+
+    M = np.array([
+        [s * np.cos(angle), -s * np.sin(angle), tx],
+        [s * np.sin(angle),  s * np.cos(angle), ty]
+    ], dtype=np.float32)
 
     return cv2.warpAffine(img, M, (w, h))
 
@@ -52,21 +49,24 @@ def similarity_transform(img):
 def affine_transform(img):
     h, w = img.shape[:2]
 
-    src = np.float32([[0, 0], [w - 1, 0], [0, h - 1]])
-    dst = np.float32([[0, 0], [int(0.8 * w), 50], [50, int(0.9 * h)]])
+    M = np.array([
+        [1.0, 0.3, 50],
+        [0.2, 0.9, 30]
+    ], dtype=np.float32)
 
-    M = cv2.getAffineTransform(src, dst)
     return cv2.warpAffine(img, M, (w, h))
 
 
 def perspective_transform(img):
     h, w = img.shape[:2]
 
-    src = np.float32([[0, 0], [w - 1, 0], [w - 1, h - 1], [0, h - 1]])
-    dst = np.float32([[50, 50], [w - 100, 30], [w - 50, h - 50], [30, h - 100]])
+    H = np.array([
+        [1, 0.2, 0],
+        [0.1, 1, 0],
+        [0.0005, 0.0008, 1]
+    ], dtype=np.float32)
 
-    M = cv2.getPerspectiveTransform(src, dst)
-    return cv2.warpPerspective(img, M, (w, h))
+    return cv2.warpPerspective(img, H, (w, h))
 
 
 # =========================
@@ -161,8 +161,6 @@ def auto_perspective_correction(image_path):
         print("未检测到A4区域")
         return
 
-    h, w = img.shape[:2]
-
     width = 800
     height = int(width * 297 / 210)
 
@@ -174,28 +172,10 @@ def auto_perspective_correction(image_path):
     ])
 
     M = cv2.getPerspectiveTransform(pts_src, pts_dst)
+    result = cv2.warpPerspective(img, M, (width, height))
 
-    warped = cv2.warpPerspective(img, M, (width, height))
-
-    mask = np.ones((height, width), dtype=np.uint8) * 255
-
-    warped_color = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
-
-    inv_M = cv2.getPerspectiveTransform(pts_dst, pts_src)
-
-    restored = cv2.warpPerspective(warped, inv_M, (w, h))
-
-    gray = cv2.cvtColor(restored, cv2.COLOR_BGR2GRAY)
-    _, mask_inv = cv2.threshold(gray, 1, 255, cv2.THRESH_BINARY)
-
-    mask_inv = cv2.merge([mask_inv, mask_inv, mask_inv])
-
-    result = cv2.bitwise_and(img, cv2.bitwise_not(mask_inv))
-    result += cv2.bitwise_and(restored, mask_inv)
-
-    cv2.imwrite("a4_overlay_result.png", result)
-
-    print("A4校正完成（保留背景版本）")
+    cv2.imwrite("a4_corrected.png", result)
+    print("A4校正完成")
 
 
 # =========================
