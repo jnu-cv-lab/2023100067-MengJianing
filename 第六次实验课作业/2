@@ -1,0 +1,55 @@
+import cv2
+import os
+import numpy as np
+
+# 图像路径
+base_path = "/home/fntq/cv-course/lab01/src/1/24"
+img1_path = os.path.join(base_path, "box.png")
+img2_path = os.path.join(base_path, "box_in_scene.png")
+
+# 读取图像
+img1 = cv2.imread(img1_path)
+img2 = cv2.imread(img2_path)
+if img1 is None or img2 is None:
+    raise FileNotFoundError("图像读取失败，请检查路径")
+
+# 创建 ORB 检测器并提取特征
+orb = cv2.ORB_create(nfeatures=1000)
+kp1, des1 = orb.detectAndCompute(img1, None)
+kp2, des2 = orb.detectAndCompute(img2, None)
+
+# 1. 创建暴力匹配器
+bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
+
+# 2. 执行匹配
+matches = bf.match(des1, des2)
+
+# 3. 按距离从小到大排序
+matches = sorted(matches, key=lambda x: x.distance)
+
+# 4. 输出总匹配数量
+total_matches = len(matches)
+print(f"总匹配数量: {total_matches}")
+
+# 5. 取前30个最佳匹配
+top_n = 30
+top_matches = matches[:top_n]
+
+# 6. 可视化所有匹配（初始匹配图）—— 可选，用于提交“ORB初始匹配图”
+img_all_matches = cv2.drawMatches(img1, kp1, img2, kp2, matches, None,
+                                  flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS)
+
+# 7. 可视化前30个匹配（前30匹配结果）
+img_top_matches = cv2.drawMatches(img1, kp1, img2, kp2, top_matches, None,
+                                  flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS)
+
+# 保存结果图像
+out_all = os.path.join(base_path, "orb_initial_matches.png")      # 初始匹配图（全部）
+out_top = os.path.join(base_path, "orb_top30_matches.png")        # 前30匹配图
+
+cv2.imwrite(out_all, img_all_matches)
+cv2.imwrite(out_top, img_top_matches)
+
+print(f"初始匹配图（全部 {total_matches} 对）已保存至: {out_all}")
+print(f"前 {top_n} 个最佳匹配图已保存至: {out_top}")
+print(f"前 {top_n} 个匹配的距离值: {[m.distance for m in top_matches]}")

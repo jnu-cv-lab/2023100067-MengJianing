@@ -1,0 +1,53 @@
+import cv2
+import os
+import numpy as np
+
+base_path = "/home/fntq/cv-course/lab01/src/1/24"
+img1_path = os.path.join(base_path, "box.png")
+img2_path = os.path.join(base_path, "box_in_scene.png")
+img_box = cv2.imread(img1_path)
+img_scene = cv2.imread(img2_path)
+
+def evaluate_nfeatures(n):
+    orb = cv2.ORB_create(nfeatures=n)
+    kp1, des1 = orb.detectAndCompute(img_box, None)
+    kp2, des2 = orb.detectAndCompute(img_scene, None)
+    
+    bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
+    matches = bf.match(des1, des2)
+    matches = sorted(matches, key=lambda x: x.distance)
+    total_matches = len(matches)
+    
+    if total_matches < 4:
+        return (n, len(kp1), len(kp2), total_matches, 0, 0.0, "失败(匹配不足)")
+    
+    src_pts = np.float32([kp1[m.queryIdx].pt for m in matches]).reshape(-1,1,2)
+    dst_pts = np.float32([kp2[m.trainIdx].pt for m in matches]).reshape(-1,1,2)
+    H, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 5.0)
+    if H is None:
+        return (n, len(kp1), len(kp2), total_matches, 0, 0.0, "失败(H矩阵无效)")
+    
+    inliers = np.sum(mask)
+    ratio = inliers / total_matches
+    
+    # 定位测试
+    h_box, w_box = img_box.shape[:2]
+    corners_box = np.float32([[0,0],[w_box,0],[w_box,h_box],[0,h_box]]).reshape(-1,1,2)
+    try:
+        corners_scene = cv2.perspectiveTransform(corners_box, H)
+        corners_int = corners_scene.reshape(-1,1,2).astype(np.int32)
+        # 简单检查：四边形是否近似矩形且落在图像内
+        x, y, w, h = cv2.boundingRect(corners_int)
+        if w > 10 and h > 10 and x > 0 and y > 0 and x+w < img_scene.shape[1] and y+h < img_scene.shape[0]:
+            success = "成功"
+        else:
+            success = "边缘异常"
+    except:
+        success = "失败"
+    
+    return (n, len(kp1), len(kp2), total_matches, inliers, ratio, success)
+
+# 测试三组参数
+for n in [500, 1000, 2000]:
+    res = evaluate_nfeatures(n)
+    print(f"{res[0]}\t{res[1]}\t{res[2]}\t{res[3]}\t{res[4]}\t{res[5]:.3f}\t{res[6]}")

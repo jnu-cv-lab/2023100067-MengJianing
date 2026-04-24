@@ -1,0 +1,53 @@
+import cv2
+import os
+import numpy as np
+
+# 图像路径
+base_path = "/home/fntq/cv-course/lab01/src/1/24"
+img1_path = os.path.join(base_path, "box.png")
+img2_path = os.path.join(base_path, "box_in_scene.png")
+
+# 读取图像
+img_box = cv2.imread(img1_path)
+img_scene = cv2.imread(img2_path)
+if img_box is None or img_scene is None:
+    raise FileNotFoundError("图像读取失败，请检查路径")
+
+# 提取 ORB 特征并计算单应矩阵（复用任务3的代码）
+orb = cv2.ORB_create(nfeatures=1000)
+kp1, des1 = orb.detectAndCompute(img_box, None)
+kp2, des2 = orb.detectAndCompute(img_scene, None)
+
+bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
+matches = bf.match(des1, des2)
+matches = sorted(matches, key=lambda x: x.distance)
+
+if len(matches) < 4:
+    raise ValueError("匹配点不足4对，无法计算单应矩阵")
+
+src_pts = np.float32([kp1[m.queryIdx].pt for m in matches]).reshape(-1, 1, 2)
+dst_pts = np.float32([kp2[m.trainIdx].pt for m in matches]).reshape(-1, 1, 2)
+
+H, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 5.0)
+if H is None:
+    raise ValueError("无法计算单应矩阵，请检查匹配质量")
+
+# 1. 获取 box.png 的四个角点（左上、右上、右下、左下）
+h_box, w_box = img_box.shape[:2]
+corners_box = np.float32([[0, 0], [w_box, 0], [w_box, h_box], [0, h_box]]).reshape(-1, 1, 2)
+
+# 2. 使用单应矩阵投影角点到场景图像坐标系中
+corners_scene = cv2.perspectiveTransform(corners_box, H)
+
+# 3. 在场景图像上绘制多边形边框（需要转换为整数点）
+corners_scene_int = corners_scene.reshape(-1, 1, 2).astype(np.int32)
+img_result = img_scene.copy()
+cv2.polylines(img_result, [corners_scene_int], isClosed=True, color=(0, 255, 0), thickness=3)
+
+
+
+# 保存结果图
+out_path = os.path.join(base_path, "box_detection_result.png")
+cv2.imwrite(out_path, img_result)
+print(f"目标定位结果图已保存至: {out_path}")
+
