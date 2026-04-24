@@ -1,1 +1,35 @@
+import cv2
+import os   # 必须导入 os 模块
 
+# 图像绝对路径
+img1 = cv2.imread("/home/fntq/cv-course/lab01/src/1/24/box.png")
+img2 = cv2.imread("/home/fntq/cv-course/lab01/src/1/24/box_in_scene.png")
+
+# 确保图像读取成功
+if img1 is None or img2 is None:
+    raise FileNotFoundError("图像读取失败，请检查路径或文件是否存在")
+
+# 创建 ORB 检测器
+orb = cv2.ORB_create(nfeatures=1000)
+
+# 检测关键点与描述子
+kp1, des1 = orb.detectAndCompute(img1, None)
+kp2, des2 = orb.detectAndCompute(img2, None)
+
+# 输出信息
+print(f"box.png 关键点数量: {len(kp1)}")
+print(f"box_in_scene.png 关键点数量: {len(kp2)}")
+print(f"描述子维度: {des1.shape[1] if des1 is not None else 0}")
+
+# 可视化关键点
+img1_kp = cv2.drawKeypoints(img1, kp1, None, color=(0, 255, 0), flags=cv2.DrawMatchesFlags_DEFAULT)
+img2_kp = cv2.drawKeypoints(img2, kp2, None, color=(0, 255, 0), flags=cv2.DrawMatchesFlags_DEFAULT)
+
+# 保存图像到原图像所在文件夹
+base_path = "/home/fntq/cv-course/lab01/src/1/24"
+out1 = os.path.join(base_path, "box_keypoints.png")
+out2 = os.path.join(base_path, "box_in_scene_keypoints.png")
+cv2.imwrite(out1, img1_kp)
+cv2.imwrite(out2, img2_kp)
+
+print(f"\n特征点可视化图已保存至:\n - {out1}\n - {out2}")
