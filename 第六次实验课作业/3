@@ -1,0 +1,59 @@
+import cv2
+import os
+import numpy as np
+
+# 图像路径
+base_path = "/home/fntq/cv-course/lab01/src/1/24"
+img1_path = os.path.join(base_path, "box.png")
+img2_path = os.path.join(base_path, "box_in_scene.png")
+
+# 读取图像
+img1 = cv2.imread(img1_path)
+img2 = cv2.imread(img2_path)
+if img1 is None or img2 is None:
+    raise FileNotFoundError("图像读取失败，请检查路径")
+
+# 提取 ORB 特征并匹配（与任务2一致）
+orb = cv2.ORB_create(nfeatures=1000)
+kp1, des1 = orb.detectAndCompute(img1, None)
+kp2, des2 = orb.detectAndCompute(img2, None)
+
+bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
+matches = bf.match(des1, des2)
+matches = sorted(matches, key=lambda x: x.distance)
+
+total_matches = len(matches)
+print(f"总匹配数量（任务2）: {total_matches}")
+
+if total_matches < 4:
+    print("匹配点不足4对，无法计算单应矩阵")
+    exit(0)
+
+# 提取对应点坐标
+src_pts = np.float32([kp1[m.queryIdx].pt for m in matches]).reshape(-1, 1, 2)
+dst_pts = np.float32([kp2[m.trainIdx].pt for m in matches]).reshape(-1, 1, 2)
+
+# 使用 RANSAC 估计单应矩阵，重投影误差阈值 5.0
+H, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 5.0)
+
+# mask 是 (total_matches, 1) 的 uint8 数组，1 表示内点
+mask = mask.ravel().astype(bool)
+inliers = np.sum(mask)
+inlier_ratio = inliers / total_matches
+
+print(f"RANSAC 内点数量: {inliers}")
+print(f"内点比例: {inlier_ratio:.4f} ({inlier_ratio*100:.2f}%)")
+print("\nHomography 矩阵（单应矩阵）:")
+print(H)
+
+# 提取内点匹配（用于可视化）
+inlier_matches = [m for i, m in enumerate(matches) if mask[i]]
+
+# 可视化 RANSAC 后的内点匹配图
+img_ransac_matches = cv2.drawMatches(img1, kp1, img2, kp2, inlier_matches, None,
+                                     flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS)
+
+# 保存结果
+out_ransac = os.path.join(base_path, "ransac_inliers_matches.png")
+cv2.imwrite(out_ransac, img_ransac_matches)
+print(f"\nRANSAC 后的匹配图已保存至: {out_ransac}")
