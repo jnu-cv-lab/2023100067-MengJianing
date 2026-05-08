@@ -1,0 +1,190 @@
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.font_manager as fm
+import seaborn as sns
+import warnings
+from sklearn import datasets
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score, confusion_matrix
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.naive_bayes import GaussianNB
+from sklearn.linear_model import LogisticRegression
+from sklearn.svm import SVC
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.ensemble import RandomForestClassifier
+
+warnings.filterwarnings('ignore')
+
+# ---------- 自适应中文字体 ----------
+def set_chinese_font():
+    preferred = ['SimHei', 'Microsoft YaHei', 'WenQuanYi Zen Hei',
+                 'Noto Sans CJK SC', 'PingFang SC', 'Heiti SC', 'Arial Unicode MS']
+    available = [f.name for f in fm.fontManager.ttflist]
+    for font in preferred:
+        if font in available:
+            plt.rcParams['font.sans-serif'] = [font]
+            plt.rcParams['axes.unicode_minus'] = False
+            return
+    # 无中文字体时改用英文，避免方块
+    plt.rcParams['font.family'] = 'sans-serif'
+    print("未找到中文字体，图表将使用英文显示。")
+set_chinese_font()
+
+# ==========================================
+# 任务 1：数据准备
+# ==========================================
+print("========== 任务1：数据准备 ==========")
+digits = datasets.load_digits()
+n_samples = digits.images.shape[0]
+h, w = digits.images.shape[1], digits.images.shape[2]
+print(f"图像数量：{n_samples}")
+print(f"每张图像大小：{h} × {w}")
+print(f"类别标签：{np.unique(digits.target)}")
+
+fig, axes = plt.subplots(2, 5, figsize=(10, 5))
+for ax, img, label in zip(axes.flat, digits.images[:10], digits.target[:10]):
+    ax.imshow(img, cmap=plt.cm.gray_r)
+    ax.set_title(f"标签: {label}" if 'SimHei' in plt.rcParams.get('font.sans-serif',[]) else f"Label: {label}")
+    ax.axis('off')
+fig.suptitle("任务1：样本图像" if 'SimHei' in plt.rcParams.get('font.sans-serif',[]) else "Task 1: Sample Images")
+plt.tight_layout()
+plt.show()
+
+# ==========================================
+# 任务 2：数据划分
+# ==========================================
+print("\n========== 任务2：数据划分 ==========")
+X, y = digits.data, digits.target
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=42)
+print(f"训练集样本数：{X_train.shape[0]}")
+print(f"测试集样本数：{X_test.shape[0]}")
+print("\n【分析】")
+print("训练集用来拟合模型参数，使模型从已知标注数据中学习特征与标签的映射关系。")
+print("测试集用来评估模型在新数据上的泛化能力，避免过拟合。")
+
+# ==========================================
+# 任务 3：特征表示
+# ==========================================
+print("\n========== 任务3：特征表示 ==========")
+print(f"原始图像形状：{digits.images[0].shape}  ->  展平后特征向量形状：{digits.data[0].shape}")
+print("转换方式：将8×8的二维像素矩阵按行（或列）顺序连接成一个64维的一维数组。")
+print("\n【为什么需要这种转换？】")
+print("传统机器学习模型（如SVM、决策树等）通常要求输入为固定长度的数值向量，")
+print("无法直接处理二维图像结构，因此必须将图像展平为特征向量。")
+print("\n【原始像素作为特征的优缺点】")
+print("优点：简单直观，无需人工特征设计，保留了图像的全部灰度信息。")
+print("缺点：丢失了像素之间的空间位置关系（如边缘、纹理）；")
+print("对平移、旋转、缩放等变化敏感；维度较高且可能包含冗余信息。")
+
+# ==========================================
+# 任务 4：模型训练
+# ==========================================
+print("\n========== 任务4：模型训练与评估 ==========")
+models = {
+    "KNN": KNeighborsClassifier(n_neighbors=3),
+    "Naive Bayes": GaussianNB(),
+    "Logistic Regression": LogisticRegression(max_iter=2000),
+    "SVM": SVC(gamma='scale'),
+    "Decision Tree": DecisionTreeClassifier(random_state=42),
+    "Random Forest": RandomForestClassifier(n_estimators=100, random_state=42)
+}
+
+results = {}
+predictions = {}
+for name, clf in models.items():
+    clf.fit(X_train, y_train)
+    y_pred = clf.predict(X_test)
+    acc = accuracy_score(y_test, y_pred)
+    results[name] = acc
+    predictions[name] = y_pred
+    print(f"{name:20s} 测试准确率：{acc:.4f}")
+
+# ==========================================
+# 任务 5：结果比较（增强分析）
+# ==========================================
+print("\n========== 任务5：结果比较 ==========")
+print(f"{'模型':20s} {'测试准确率':>8s}")
+print("-" * 32)
+for name, acc in results.items():
+    print(f"{name:20s} {acc:.4f}")
+
+# 柱状图
+plt.figure(figsize=(10, 6))
+sns.barplot(x=list(results.keys()), y=list(results.values()))
+plt.title("模型准确率对比" if 'SimHei' in plt.rcParams.get('font.sans-serif',[]) else "Model Accuracy Comparison")
+plt.ylim(0.7, 1.0)
+plt.ylabel("准确率" if 'SimHei' in plt.rcParams.get('font.sans-serif',[]) else "Accuracy")
+plt.xticks(rotation=15)
+plt.tight_layout()
+plt.show()
+
+best = max(results, key=results.get)
+worst = min(results, key=results.get)
+print(f"\n✅ 准确率最高: {best} ({results[best]:.4f})")
+print(f"❌ 准确率最低: {worst} ({results[worst]:.4f})")
+
+print("\n【差异分析】")
+print("不同模型之间的表现差异明显。原因分析如下：")
+print("- KNN: 基于像素距离直接分类，在特征空间较规整的小数据集上表现优秀；")
+print("- SVM: 通过核函数在高维空间寻找最优分隔面，对高维小样本问题特别有效；")
+print("- 随机森林: 通过集成多棵决策树降低方差，泛化能力好于单棵决策树；")
+print("- 逻辑回归: 线性模型，但经one-vs-rest可处理多类，效果尚可；")
+print("- 决策树: 易过拟合，对像素数值变化敏感；")
+print("- 朴素贝叶斯: 假设特征独立（与实际图像像素高度相关相悖），导致性能受限。")
+
+# ==========================================
+# 任务 6：错误样本分析（增强分析）—— 仍以SVM为例
+# ==========================================
+print("\n========== 任务6：错误样本分析（SVM为例） ==========")
+model_analyze = "SVM"
+y_pred = predictions[model_analyze]
+cm = confusion_matrix(y_test, y_pred)
+
+# 混淆矩阵图
+plt.figure(figsize=(8, 6))
+sns.heatmap(cm, annot=True, fmt='d', cmap='Blues')
+plt.xlabel("预测标签" if 'SimHei' in plt.rcParams.get('font.sans-serif',[]) else "Predicted")
+plt.ylabel("真实标签" if 'SimHei' in plt.rcParams.get('font.sans-serif',[]) else "True")
+plt.title(f"{model_analyze} 混淆矩阵" if 'SimHei' in plt.rcParams.get('font.sans-serif',[]) else f"{model_analyze} Confusion Matrix")
+plt.show()
+
+# 错误样本定位
+errors_idx = np.where(y_pred != y_test)[0]
+print(f"\n错误分类样本总数：{len(errors_idx)}（测试集共{len(y_test)}个）")
+
+# 统计最容易混淆的数字对
+confusion_pairs = []
+for idx in errors_idx:
+    confusion_pairs.append((y_test[idx], y_pred[idx]))  # (真实标签, 预测标签)
+from collections import Counter
+pair_counts = Counter(confusion_pairs)
+most_common_pairs = pair_counts.most_common(5)
+print("\n最常被混淆的数字对（真实 → 预测）：")
+for pair, count in most_common_pairs:
+    print(f"数字 {pair[0]} 被误判为 {pair[1]}，出现 {count} 次")
+
+# 显示若干错误样本图像
+if len(errors_idx) > 0:
+    n_show = min(8, len(errors_idx))
+    fig, axes = plt.subplots(2, 4, figsize=(12, 6)) if n_show>4 else plt.subplots(1, n_show, figsize=(12,3))
+    axes = axes.flatten() if n_show>1 else [axes]
+    for i, idx in enumerate(errors_idx[:n_show]):
+        img = X_test[idx].reshape(8, 8)
+        t_label, p_label = y_test[idx], y_pred[idx]
+        axes[i].imshow(img, cmap='gray_r')
+        title_str = f"真实:{t_label} 预测:{p_label}" if 'SimHei' in plt.rcParams.get('font.sans-serif',[]) else f"T:{t_label} P:{p_label}"
+        axes[i].set_title(title_str)
+        axes[i].axis('off')
+    for j in range(n_show, len(axes)):
+        axes[j].axis('off')
+    fig.suptitle("错误分类样本示例" if 'SimHei' in plt.rcParams.get('font.sans-serif',[]) else "Misclassified Samples")
+    plt.tight_layout()
+    plt.show()
+
+print("\n【错误原因分析】")
+print("1. 形状相似：数字3、8、9、5等的某些手写体存在相似结构（如3顶部闭合后像8，9的圈太小像3）。")
+print("2. 低分辨率：8×8的像素图丢失了细节，原本可区分的笔画被模糊化，边界模糊的数字更容易被误判。")
+print("3. 个人书写差异：部分手写样本带有连笔、倾斜，导致特征向量与标准模板相差较大，")
+print("   被模型划入错误类别。")
+print("4. 模型局限性：SVM虽然整体性能好，但对于特征空间高度重叠的少数样本仍会出错，")
+print("   这些样本常处于类别决策边界附近。")
