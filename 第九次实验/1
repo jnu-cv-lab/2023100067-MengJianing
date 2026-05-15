@@ -1,1 +1,307 @@
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import DataLoader, random_split
+from torchvision import datasets, transforms
+import matplotlib.pyplot as plt
+import numpy as np
 
+# ==============================
+# 任务1：环境准备（强制CPU运行，无CUDA错误）
+# ==============================
+print("="*50)
+print("任务1：环境准备")
+print("="*50)
+
+# 强制使用CPU，彻底解决CUDA相关错误
+device = torch.device("cpu")
+print(f"使用设备: {device}")
+print(f"PyTorch版本: {torch.__version__}")
+
+# 简单张量操作测试
+x = torch.tensor([[1, 2], [3, 4]], device=device)
+y = torch.tensor([[5, 6], [7, 8]], device=device)
+print(f"张量加法测试:\n{x + y}")
+print("环境准备完成 ✅\n")
+
+# ==============================
+# 任务2：加载MNIST数据集
+# ==============================
+print("="*50)
+print("任务2：加载MNIST数据集")
+print("="*50)
+
+# 数据预处理
+transform = transforms.Compose([
+    transforms.ToTensor(),
+    transforms.Normalize((0.1307,), (0.3081,))  # MNIST数据集的均值和标准差
+])
+
+# 加载完整训练集和测试集
+full_train_dataset = datasets.MNIST(
+    root='./data', train=True, download=True, transform=transform
+)
+test_dataset = datasets.MNIST(
+    root='./data', train=False, download=True, transform=transform
+)
+
+# 将训练集划分为训练集(80%)和验证集(20%)
+train_size = int(0.8 * len(full_train_dataset))
+val_size = len(full_train_dataset) - train_size
+train_dataset, val_dataset = random_split(
+    full_train_dataset, [train_size, val_size]
+)
+
+# 创建数据加载器
+batch_size = 64
+train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+
+print(f"训练集样本数: {len(train_dataset)}")
+print(f"验证集样本数: {len(val_dataset)}")
+print(f"测试集样本数: {len(test_dataset)}")
+print(f"类别数: {len(full_train_dataset.classes)}")
+print(f"图像尺寸: {full_train_dataset[0][0].shape}")
+
+# 显示8张样本图像（全英文标题，无乱码）
+plt.figure(figsize=(12, 6))
+for i in range(8):
+    img, label = full_train_dataset[i]
+    plt.subplot(2, 4, i+1)
+    plt.imshow(img.squeeze(), cmap='gray')
+    plt.title(f"Label: {label}")
+    plt.axis('off')
+plt.suptitle("MNIST Dataset Samples", fontsize=16)
+plt.savefig('mnist_samples.png', dpi=150, bbox_inches='tight')
+print("数据集样本图已保存为 mnist_samples.png")
+print("数据集加载完成 ✅\n")
+
+# ==============================
+# 任务3：定义CNN模型
+# ==============================
+print("="*50)
+print("任务3：定义CNN模型")
+print("="*50)
+
+class SimpleCNN(nn.Module):
+    def __init__(self, num_classes=10):
+        super(SimpleCNN, self).__init__()
+        # 第一个卷积块：输入1通道(灰度图)，输出16通道，卷积核3x3
+        self.conv1 = nn.Conv2d(1, 16, kernel_size=3, padding=1)
+        self.relu1 = nn.ReLU()
+        self.pool1 = nn.MaxPool2d(kernel_size=2, stride=2)  # 输出尺寸: 14x14
+        
+        # 第二个卷积块：输入16通道，输出32通道
+        self.conv2 = nn.Conv2d(16, 32, kernel_size=3, padding=1)
+        self.relu2 = nn.ReLU()
+        self.pool2 = nn.MaxPool2d(kernel_size=2, stride=2)  # 输出尺寸: 7x7
+        
+        # 全连接层
+        self.fc1 = nn.Linear(32 * 7 * 7, 128)
+        self.relu3 = nn.ReLU()
+        self.fc2 = nn.Linear(128, num_classes)
+    
+    def forward(self, x):
+        x = self.pool1(self.relu1(self.conv1(x)))
+        x = self.pool2(self.relu2(self.conv2(x)))
+        x = x.view(x.size(0), -1)  # 展平
+        x = self.relu3(self.fc1(x))
+        x = self.fc2(x)
+        return x
+
+# 初始化模型并移到设备上
+model = SimpleCNN().to(device)
+print("模型结构:")
+print(model)
+print("模型定义完成 ✅\n")
+
+# ==============================
+# 任务4&5：训练与验证模型
+# ==============================
+print("="*50)
+print("任务4&5：训练与验证模型")
+print("="*50)
+
+# 定义损失函数和优化器
+criterion = nn.CrossEntropyLoss()
+optimizer = optim.Adam(model.parameters(), lr=0.001)
+
+# 训练参数
+num_epochs = 5
+train_losses = []
+train_accs = []
+val_losses = []
+val_accs = []
+
+for epoch in range(num_epochs):
+    # 训练阶段
+    model.train()
+    train_loss = 0.0
+    train_correct = 0
+    train_total = 0
+    
+    for images, labels in train_loader:
+        images, labels = images.to(device), labels.to(device)
+        
+        # 前向传播
+        outputs = model(images)
+        loss = criterion(outputs, labels)
+        
+        # 反向传播和优化
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+        
+        # 统计
+        train_loss += loss.item() * images.size(0)
+        _, predicted = torch.max(outputs.data, 1)
+        train_total += labels.size(0)
+        train_correct += (predicted == labels).sum().item()
+    
+    # 计算训练集平均损失和准确率
+    train_loss = train_loss / train_total
+    train_acc = train_correct / train_total
+    train_losses.append(train_loss)
+    train_accs.append(train_acc)
+    
+    # 验证阶段
+    model.eval()
+    val_loss = 0.0
+    val_correct = 0
+    val_total = 0
+    
+    with torch.no_grad():
+        for images, labels in val_loader:
+            images, labels = images.to(device), labels.to(device)
+            outputs = model(images)
+            loss = criterion(outputs, labels)
+            
+            val_loss += loss.item() * images.size(0)
+            _, predicted = torch.max(outputs.data, 1)
+            val_total += labels.size(0)
+            val_correct += (predicted == labels).sum().item()
+    
+    val_loss = val_loss / val_total
+    val_acc = val_correct / val_total
+    val_losses.append(val_loss)
+    val_accs.append(val_acc)
+    
+    print(f"Epoch [{epoch+1}/{num_epochs}]")
+    print(f"  训练集: Loss={train_loss:.4f}, Accuracy={train_acc:.4f}")
+    print(f"  验证集: Loss={val_loss:.4f}, Accuracy={val_acc:.4f}")
+
+print("模型训练完成 ✅\n")
+
+# ==============================
+# 任务6：测试模型
+# ==============================
+print("="*50)
+print("任务6：测试模型")
+print("="*50)
+
+model.eval()
+test_loss = 0.0
+test_correct = 0
+test_total = 0
+all_preds = []
+all_labels = []
+test_images = []
+
+with torch.no_grad():
+    for images, labels in test_loader:
+        images, labels = images.to(device), labels.to(device)
+        outputs = model(images)
+        loss = criterion(outputs, labels)
+        
+        test_loss += loss.item() * images.size(0)
+        _, predicted = torch.max(outputs.data, 1)
+        test_total += labels.size(0)
+        test_correct += (predicted == labels).sum().item()
+        
+        # 保存预测结果和图像用于展示
+        all_preds.extend(predicted.cpu().numpy())
+        all_labels.extend(labels.cpu().numpy())
+        test_images.extend(images.cpu().numpy())
+
+test_loss = test_loss / test_total
+test_acc = test_correct / test_total
+
+print(f"测试集结果:")
+print(f"  Loss: {test_loss:.4f}")
+print(f"  Accuracy: {test_acc:.4f}")
+
+# 显示8张测试图像及其预测结果（全英文，无乱码）
+plt.figure(figsize=(12, 6))
+for i in range(8):
+    img = test_images[i].squeeze()
+    true_label = all_labels[i]
+    pred_label = all_preds[i]
+    plt.subplot(2, 4, i+1)
+    plt.imshow(img, cmap='gray')
+    # 正确显示绿色，错误显示红色
+    color = 'green' if true_label == pred_label else 'red'
+    plt.title(f"True: {true_label}, Pred: {pred_label}", color=color)
+    plt.axis('off')
+plt.suptitle("Test Set Predictions", fontsize=16)
+plt.savefig('test_predictions.png', dpi=150, bbox_inches='tight')
+print("测试集预测结果图已保存为 test_predictions.png")
+print("模型测试完成 ✅\n")
+
+# ==============================
+# 任务7：绘制训练曲线
+# ==============================
+print("="*50)
+print("任务7：绘制训练曲线")
+print("="*50)
+
+epochs = range(1, num_epochs+1)
+
+# 绘制Loss曲线
+plt.figure(figsize=(12, 5))
+plt.subplot(1, 2, 1)
+plt.plot(epochs, train_losses, 'b-', linewidth=2, label='Training Loss')
+plt.plot(epochs, val_losses, 'r-', linewidth=2, label='Validation Loss')
+plt.title('Training and Validation Loss')
+plt.xlabel('Epoch')
+plt.ylabel('Loss')
+plt.legend()
+plt.grid(True, alpha=0.3)
+
+# 绘制Accuracy曲线
+plt.subplot(1, 2, 2)
+plt.plot(epochs, train_accs, 'b-', linewidth=2, label='Training Accuracy')
+plt.plot(epochs, val_accs, 'r-', linewidth=2, label='Validation Accuracy')
+plt.title('Training and Validation Accuracy')
+plt.xlabel('Epoch')
+plt.ylabel('Accuracy')
+plt.legend()
+plt.grid(True, alpha=0.3)
+
+plt.tight_layout()
+plt.savefig('training_curves.png', dpi=150, bbox_inches='tight')
+print("训练曲线图已保存为 training_curves.png")
+print("训练曲线绘制完成 ✅\n")
+
+# ==============================
+# 结果分析辅助输出
+# ==============================
+print("="*50)
+print("实验结果分析参考")
+print("="*50)
+print(f"最终测试集准确率: {test_acc:.4f}")
+print(f"训练集最终准确率: {train_accs[-1]:.4f}")
+print(f"验证集最终准确率: {val_accs[-1]:.4f}")
+print(f"训练集与验证集准确率差距: {abs(train_accs[-1] - val_accs[-1]):.4f}")
+
+# 找出错误分类的样本
+errors = np.array(all_preds) != np.array(all_labels)
+error_indices = np.where(errors)[0]
+print(f"错误分类的样本数量: {len(error_indices)}")
+print(f"错误率: {len(error_indices)/len(all_labels):.4f}")
+
+
+print("\n生成的实验报告所需文件:")
+print("1. mnist_samples.png - MNIST数据集样本图")
+print("2. test_predictions.png - 测试集预测结果图")
+print("3. training_curves.png - 训练loss和accuracy曲线")

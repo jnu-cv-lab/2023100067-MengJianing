@@ -1,0 +1,251 @@
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import DataLoader, random_split
+from torchvision import datasets, transforms
+import matplotlib.pyplot as plt
+import numpy as np
+from time import time
+
+# 固定随机种子保证可复现
+torch.manual_seed(42)
+device = torch.device('cpu')
+print(f"使用设备: {device}")
+
+# --------------------- 数据准备 ---------------------
+transform_mnist = transforms.Compose([
+    transforms.ToTensor(),
+    transforms.Normalize((0.1307,), (0.3081,))
+])
+
+transform_cifar = transforms.Compose([
+    transforms.ToTensor(),
+    transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010))
+])
+
+# MNIST 分割
+full_train = datasets.MNIST('./data', train=True, download=True, transform=transform_mnist)
+test_mnist = datasets.MNIST('./data', train=False, transform=transform_mnist)
+train_mnist, val_mnist = random_split(full_train, [48000, 12000])
+
+# CIFAR-10 分割
+full_train_cifar = datasets.CIFAR10('./data', train=True, download=True, transform=transform_cifar)
+test_cifar = datasets.CIFAR10('./data', train=False, transform=transform_cifar)
+train_cifar, val_cifar = random_split(full_train_cifar, [40000, 10000])
+
+batch_size = 64
+train_loader_mnist = DataLoader(train_mnist, batch_size=batch_size, shuffle=True)
+val_loader_mnist = DataLoader(val_mnist, batch_size=batch_size)
+test_loader_mnist = DataLoader(test_mnist, batch_size=batch_size)
+
+train_loader_cifar = DataLoader(train_cifar, batch_size=batch_size, shuffle=True)
+val_loader_cifar = DataLoader(val_cifar, batch_size=batch_size)
+test_loader_cifar = DataLoader(test_cifar, batch_size=batch_size)
+
+# --------------------- 模型定义 ---------------------
+class BaseCNN(nn.Module):
+    """基础 CNN（与基础任务相同）"""
+    def __init__(self, in_channels=1, num_classes=10):
+        super().__init__()
+        self.conv1 = nn.Conv2d(in_channels, 16, 3, padding=1)
+        self.conv2 = nn.Conv2d(16, 32, 3, padding=1)
+        self.pool = nn.MaxPool2d(2, 2)
+        self.relu = nn.ReLU()
+        self.fc1 = nn.Linear(32 * 7 * 7, 128)
+        self.fc2 = nn.Linear(128, num_classes)
+
+    def forward(self, x):
+        x = self.pool(self.relu(self.conv1(x)))
+        x = self.pool(self.relu(self.conv2(x)))
+        x = x.view(x.size(0), -1)
+        x = self.relu(self.fc1(x))
+        return self.fc2(x)
+
+class DeepCNN(nn.Module):
+    """改进网络：更深 + Dropout + 更多卷积核"""
+    def __init__(self, in_channels=1, num_classes=10, dropout=0.5):
+        super().__init__()
+        self.conv1 = nn.Conv2d(in_channels, 32, 3, padding=1)
+        self.bn1 = nn.BatchNorm2d(32)
+        self.conv2 = nn.Conv2d(32, 64, 3, padding=1)
+        self.bn2 = nn.BatchNorm2d(64)
+        self.conv3 = nn.Conv2d(64, 128, 3, padding=1)
+        self.bn3 = nn.BatchNorm2d(128)
+        self.pool = nn.MaxPool2d(2, 2)
+        self.relu = nn.ReLU()
+        self.dropout = nn.Dropout(dropout)
+        self.fc1 = nn.Linear(128 * 3 * 3, 256)
+        self.fc2 = nn.Linear(256, 128)
+        self.fc3 = nn.Linear(128, num_classes)
+
+    def forward(self, x):
+        x = self.pool(self.relu(self.bn1(self.conv1(x))))
+        x = self.pool(self.relu(self.bn2(self.conv2(x))))
+        x = self.pool(self.relu(self.bn3(self.conv3(x))))
+        x = x.view(x.size(0), -1)
+        x = self.relu(self.fc1(x))
+        x = self.dropout(x)
+        x = self.relu(self.fc2(x))
+        return self.fc3(x)
+
+# --------------------- 训练函数 ---------------------
+def train(model, train_loader, val_loader, optimizer, epochs=5, name=""):
+    criterion = nn.CrossEntropyLoss()
+    train_losses, val_losses = [], []
+    train_accs, val_accs = [], []
+    for epoch in range(epochs):
+        model.train()
+        running_loss, correct, total = 0.0, 0, 0
+        for imgs, labels in train_loader:
+            imgs, labels = imgs.to(device), labels.to(device)
+            optimizer.zero_grad()
+            outputs = model(imgs)
+            loss = criterion(outputs, labels)
+            loss.backward()
+            optimizer.step()
+            running_loss += loss.item()
+            _, preds = torch.max(outputs, 1)
+            total += labels.size(0)
+            correct += (preds == labels).sum().item()
+        train_loss = running_loss / len(train_loader)
+        train_acc = correct / total
+        train_losses.append(train_loss)
+        train_accs.append(train_acc)
+
+        # 验证
+        model.eval()
+        val_loss, correct, total = 0.0, 0, 0
+        with torch.no_grad():
+            for imgs, labels in val_loader:
+                imgs, labels = imgs.to(device), labels.to(device)
+                outputs = model(imgs)
+                loss = criterion(outputs, labels)
+                val_loss += loss.item()
+                _, preds = torch.max(outputs, 1)
+                total += labels.size(0)
+                correct += (preds == labels).sum().item()
+        val_loss /= len(val_loader)
+        val_acc = correct / total
+        val_losses.append(val_loss)
+        val_accs.append(val_acc)
+        print(f"{name} Epoch {epoch+1}/{epochs} | Train Loss: {train_loss:.4f} Acc: {train_acc:.4f} | Val Loss: {val_loss:.4f} Acc: {val_acc:.4f}")
+    return train_losses, val_losses, train_accs, val_accs
+
+def test(model, test_loader):
+    model.eval()
+    criterion = nn.CrossEntropyLoss()
+    test_loss, correct, total = 0.0, 0, 0
+    with torch.no_grad():
+        for imgs, labels in test_loader:
+            imgs, labels = imgs.to(device), labels.to(device)
+            outputs = model(imgs)
+            loss = criterion(outputs, labels)
+            test_loss += loss.item()
+            _, preds = torch.max(outputs, 1)
+            total += labels.size(0)
+            correct += (preds == labels).sum().item()
+    return test_loss / len(test_loader), correct / total
+
+# --------------------- 进阶任务1：修改网络结构 ---------------------
+print("\n" + "="*50)
+print("进阶任务1：修改网络结构对比")
+print("="*50)
+
+model_base = BaseCNN(in_channels=1, num_classes=10).to(device)
+model_deep = DeepCNN(in_channels=1, num_classes=10, dropout=0.5).to(device)
+
+# 训练基础模型 (Adam, lr=0.001)
+print("\n训练基础模型 BaseCNN (Adam lr=0.001)...")
+opt_base = optim.Adam(model_base.parameters(), lr=0.001)
+hist_base = train(model_base, train_loader_mnist, val_loader_mnist, opt_base, epochs=5, name="Base")
+
+# 训练改进模型
+print("\n训练改进模型 DeepCNN (Adam lr=0.001)...")
+opt_deep = optim.Adam(model_deep.parameters(), lr=0.001)
+hist_deep = train(model_deep, train_loader_mnist, val_loader_mnist, opt_deep, epochs=5, name="Deep")
+
+# 测试
+test_loss_base, test_acc_base = test(model_base, test_loader_mnist)
+test_loss_deep, test_acc_deep = test(model_deep, test_loader_mnist)
+
+print(f"\n基础模型测试准确率: {test_acc_base:.4f}")
+print(f"改进模型测试准确率: {test_acc_deep:.4f}")
+
+# 绘制对比曲线
+plt.figure(figsize=(12,4))
+plt.subplot(1,2,1)
+plt.plot(hist_base[0], label='Base Train Loss')
+plt.plot(hist_base[1], label='Base Val Loss')
+plt.plot(hist_deep[0], label='Deep Train Loss')
+plt.plot(hist_deep[1], label='Deep Val Loss')
+plt.title('Loss Curves: Base vs Deep CNN')
+plt.xlabel('Epoch'); plt.ylabel('Loss'); plt.legend()
+
+plt.subplot(1,2,2)
+plt.plot(hist_base[2], label='Base Train Acc')
+plt.plot(hist_base[3], label='Base Val Acc')
+plt.plot(hist_deep[2], label='Deep Train Acc')
+plt.plot(hist_deep[3], label='Deep Val Acc')
+plt.title('Accuracy Curves: Base vs Deep CNN')
+plt.xlabel('Epoch'); plt.ylabel('Accuracy'); plt.legend()
+plt.tight_layout()
+plt.savefig('advanced_network_comparison.png')
+print("网络结构对比图已保存为 advanced_network_comparison.png")
+
+# --------------------- 进阶任务2：比较不同优化器 ---------------------
+print("\n" + "="*50)
+print("进阶任务2：优化器比较 (SGD vs Adam)")
+print("="*50)
+
+optimizer_configs = [
+    ('SGD', optim.SGD, {'lr': 0.01, 'momentum': 0.9}),
+    ('SGD', optim.SGD, {'lr': 0.001, 'momentum': 0.9}),
+    ('Adam', optim.Adam, {'lr': 0.001}),
+    ('Adam', optim.Adam, {'lr': 0.0001}),
+]
+
+results_optim = []
+for opt_name, opt_cls, kwargs in optimizer_configs:
+    print(f"\n训练 BaseCNN 使用 {opt_name} lr={kwargs['lr']} ...")
+    model = BaseCNN(in_channels=1, num_classes=10).to(device)
+    optimizer = opt_cls(model.parameters(), **kwargs)
+    train(model, train_loader_mnist, val_loader_mnist, optimizer, epochs=5, name=f"{opt_name}-lr{kwargs['lr']}")
+    test_loss, test_acc = test(model, test_loader_mnist)
+    results_optim.append((f"{opt_name} (lr={kwargs['lr']})", test_acc))
+    print(f"测试准确率: {test_acc:.4f}")
+
+print("\n优化器比较结果:")
+print(f"{'Optimizer':<20} {'Test Accuracy':<15}")
+for name, acc in results_optim:
+    print(f"{name:<20} {acc:<15.4f}")
+
+# 表格
+opt_df = "\n".join([f"| {n} | {a:.4f} |" for n, a in results_optim])
+print(f"\n优化器比较 Markdown 表格:\n| Optimizer | Test Accuracy |\n|---|---|\n{opt_df}")
+
+# --------------------- 进阶任务3：CIFAR-10 实验 ---------------------
+print("\n" + "="*50)
+print("进阶任务3：CIFAR-10 实验")
+print("="*50)
+
+# 使用改进模型适配 CIFAR-10 (3通道)
+model_cifar = DeepCNN(in_channels=3, num_classes=10, dropout=0.5).to(device)
+opt_cifar = optim.Adam(model_cifar.parameters(), lr=0.001)
+print("训练 DeepCNN 在 CIFAR-10 上...")
+train(model_cifar, train_loader_cifar, val_loader_cifar, opt_cifar, epochs=10, name="CIFAR-10")
+test_loss_cifar, test_acc_cifar = test(model_cifar, test_loader_cifar)
+print(f"CIFAR-10 测试准确率: {test_acc_cifar:.4f}")
+
+# 汇总对比
+print("\n" + "="*50)
+print("最终汇总")
+print("="*50)
+print(f"MNIST 基础模型测试准确率: {test_acc_base:.4f}")
+print(f"MNIST 改进模型测试准确率: {test_acc_deep:.4f}")
+print(f"CIFAR-10 改进模型测试准确率: {test_acc_cifar:.4f}")
+
+print("\nMNIST vs CIFAR-10 比较表格:")
+print("| 数据集 | 图像类型 | 类别数 | 测试准确率 | 难度 |")
+print("|---|---|---|---|---|")
+print(f"| MNIST | 灰度手写数字 | 10 | {test_acc_deep:.4f} | 较低 |")
+print(f"| CIFAR-10 | 彩色自然图像 | 10 | {test_acc_cifar:.4f} | 较高 |")
