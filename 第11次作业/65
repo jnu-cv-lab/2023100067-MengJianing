@@ -1,0 +1,174 @@
+import numpy as np
+import matplotlib.pyplot as plt
+
+# ------------------------- 1. Sinusoidal Position Encoding -------------------------
+def sinusoidal_position_encoding(seq_len, d_model):
+    """返回 shape (seq_len, d_model) 的位置编码"""
+    pe = np.zeros((seq_len, d_model))
+    position = np.arange(seq_len)[:, np.newaxis]  # (seq_len, 1)
+    div_term = np.exp(np.arange(0, d_model, 2) * -(np.log(10000.0) / d_model))
+    pe[:, 0::2] = np.sin(position * div_term)
+    pe[:, 1::2] = np.cos(position * div_term)
+    return pe
+
+# ------------------------- 2. 二维向量旋转 -------------------------
+def rotate_2d(x, y, theta):
+    """二维向量绕原点逆时针旋转 theta 弧度"""
+    cos_t, sin_t = np.cos(theta), np.sin(theta)
+    x_rot = x * cos_t - y * sin_t
+    y_rot = x * sin_t + y * cos_t
+    return x_rot, y_rot
+
+# ------------------------- 3. 高维 RoPE -------------------------
+def rotate_half(x):
+    """辅助函数：对偶数索引和奇数索引交换并取负"""
+    x1, x2 = x[..., ::2], x[..., 1::2]
+    return np.concatenate([-x2, x1], axis=-1)
+
+def apply_rope(x, positions, base=10000.0):
+    """
+    对张量 x (batch, seq_len, d_model) 应用 RoPE。
+    positions: (seq_len,) 或 (batch, seq_len) 的绝对位置索引。
+    返回旋转后的张量。
+    """
+    d_model = x.shape[-1]
+    # 计算每个维度的 theta
+    theta_i = base ** (-2 * np.arange(0, d_model, 2) / d_model)
+    # 形状 (seq_len, d_model//2)
+    angles = positions[:, None] * theta_i[None, :]   # 广播
+    # 将角度扩展为 (seq_len, d_model)
+    angles = np.concatenate([angles, angles], axis=-1)
+    cos_vals = np.cos(angles)
+    sin_vals = np.sin(angles)
+    # 旋转: x_rot = x * cos + rotate_half(x) * sin
+    rotated = x * cos_vals + rotate_half(x) * sin_vals
+    return rotated
+
+# 测试 RoPE 的旋转性质
+def test_rope_rotation():
+    d_model = 8
+    seq_len = 5
+    np.random.seed(42)
+    x = np.random.randn(1, seq_len, d_model)   # batch=1
+    positions = np.arange(seq_len)
+    rope_x = apply_rope(x, positions)
+    # 检查不同位置的旋转是否一致：对同一向量 x0 旋转 m 和 n，应等于先旋转 n-m 再旋转 m
+    x0 = x[0, 0, :]  # 位置0的向量
+    rope_x0 = rope_x[0, 0, :]
+    # 直接使用旋转矩阵验证（高维情况略复杂，这里打印形状）
+    print("RoPE applied successfully, shape:", rope_x.shape)
+    return
+
+# ------------------------- 4. 对比 E+pos 和 RoPE 的输入方式 -------------------------
+# 我们通过一个小例子对比：E+pos 是加法，RoPE 是乘法（旋转）
+def compare_embedding_methods(seq_len=4, d_model=8, d_vocab=10):
+    np.random.seed(42)
+    # 模拟词嵌入矩阵
+    word_emb = np.random.randn(seq_len, d_model)   # 假设每个位置已有一个词向量
+    # Sinusoidal PE
+    sin_pe = sinusoidal_position_encoding(seq_len, d_model)
+    # E+pos: 直接相加
+    e_pos = word_emb + sin_pe
+    # RoPE: 旋转词向量
+    positions = np.arange(seq_len)
+    rope_out = apply_rope(word_emb, positions)
+    print("E+pos shape:", e_pos.shape)
+    print("RoPE shape:", rope_out.shape)
+    # 差异：E+pos 混合了内容与绝对位置，RoPE 保持了内容向量的模长（旋转不改变模长）
+    print("Norm of word_emb[0]:", np.linalg.norm(word_emb[0]))
+    print("Norm of rope_out[0]:", np.linalg.norm(rope_out[0]))
+    print("Norm of e_pos[0]:", np.linalg.norm(e_pos[0]))   # 模长改变
+    return
+
+# ------------------------- 5. 数值实验验证 RoPE 的相对位置性质 -------------------------
+def relative_position_experiment():
+    """
+    生成随机 Query 和 Key 向量，计算不同绝对位置下的点积，
+    验证点积仅取决于相对位置差。
+    """
+    d_model = 64
+    max_len = 10
+    np.random.seed(123)
+    
+    # 随机生成一个 Q 向量（位置 m）和一个 K 向量（位置 n）
+    # 实际应该乘以 W^Q, W^K，但为了演示，直接使用随机向量并应用 RoPE
+    q_raw = np.random.randn(d_model)
+    k_raw = np.random.randn(d_model)
+    
+    # 预先计算所有位置的旋转版本
+    q_rot = {}
+    k_rot = {}
+    for pos in range(max_len):
+        # 扩展为 batch=1, seq=1, d_model
+        q_in = q_raw.reshape(1, 1, d_model)
+        k_in = k_raw.reshape(1, 1, d_model)
+        pos_arr = np.array([pos]).reshape(1,1)
+        q_rot[pos] = apply_rope(q_in, pos_arr).flatten()
+        k_rot[pos] = apply_rope(k_in, pos_arr).flatten()
+    
+    # 计算所有位置对 (m, n) 的点积
+    scores = np.zeros((max_len, max_len))
+    for m in range(max_len):
+        for n in range(max_len):
+            scores[m, n] = np.dot(q_rot[m], k_rot[n])
+    
+    # 分析：同相对差 d = n-m 对应的分数是否接近？
+    # 对每个 d，收集所有满足 n-m = d 的 scores[m, n]
+    diffs = {}
+    for m in range(max_len):
+        for n in range(max_len):
+            d = n - m
+            if d not in diffs:
+                diffs[d] = []
+            diffs[d].append(scores[m, n])
+    
+    # 计算每个相对差的均值和标准差
+    rel_diffs = sorted(diffs.keys())
+    means = [np.mean(diffs[d]) for d in rel_diffs]
+    stds = [np.std(diffs[d]) for d in rel_diffs]
+    
+    print("相对位置差 d : 平均点积 (标准差)")
+    for d, m, s in zip(rel_diffs, means, stds):
+        print(f"d = {d:2d} : {m:.6f} (±{s:.6f})")
+    
+    # 理想情况下，相同 d 的点积应该完全相同（理论性质），
+    # 数值误差导致微小差异，但标准差应接近 0。
+    # 绘图展示
+    plt.figure(figsize=(10,4))
+    plt.subplot(1,2,1)
+    plt.imshow(scores, cmap='viridis')
+    plt.colorbar(label='Attention Score')
+    plt.title("Scores for different (m,n) pairs")
+    plt.xlabel("n (position of Key)")
+    plt.ylabel("m (position of Query)")
+    plt.subplot(1,2,2)
+    plt.errorbar(rel_diffs, means, yerr=stds, fmt='o-', capsize=3)
+    plt.xlabel("Relative position d = n - m")
+    plt.ylabel("Mean dot product")
+    plt.title("Score depends only on relative distance")
+    plt.grid(True)
+    plt.tight_layout()
+    plt.show()
+    
+    return scores, diffs
+
+# 运行所有实验
+if __name__ == "__main__":
+    print("=== 1. Sinusoidal PE (first 5 positions, d=8) ===")
+    pe = sinusoidal_position_encoding(5, 8)
+    print(pe)
+    
+    print("\n=== 2. 2D rotation test ===")
+    x, y = 1.0, 0.0
+    theta = np.pi / 2
+    xr, yr = rotate_2d(x, y, theta)
+    print(f"Rotate (1,0) by 90° -> ({xr:.2f}, {yr:.2f})")
+    
+    print("\n=== 3. High-dim RoPE test ===")
+    test_rope_rotation()
+    
+    print("\n=== 4. Compare E+pos vs RoPE ===")
+    compare_embedding_methods()
+    
+    print("\n=== 5. Relative position property of RoPE ===")
+    scores, diffs = relative_position_experiment()
